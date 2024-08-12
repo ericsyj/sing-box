@@ -46,6 +46,7 @@ icon: material/new-box
       "type": "remote",
       "tag": "",
       "format": "source", // or binary
+      "path": "",
       "url": "",
       "download_detour": "", // optional
       "update_interval": "" // optional
