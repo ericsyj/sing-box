@@ -6,10 +6,11 @@ import (
 	"net/http"
 	"net/netip"
 	"sync"
+	"time"
 
 	"github.com/sagernet/sing-box/common/geoip"
 	C "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-dns"
+	dns "github.com/sagernet/sing-dns"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/common/x/list"
@@ -26,6 +27,7 @@ type Router interface {
 	ConnectionRouter
 	PreMatch(metadata InboundContext) error
 	ConnectionRouterEx
+	RuleSets() []RuleSet
 
 	GeoIPReader() *geoip.Reader
 	LoadGeosite(code string) (Rule, error)
@@ -64,6 +66,10 @@ type ConnectionRouterEx interface {
 
 type RuleSet interface {
 	Name() string
+	Type() string
+	Format() string
+	UpdatedTime() time.Time
+	Update(ctx context.Context) error
 	StartContext(ctx context.Context, startContext *HTTPStartContext) error
 	PostStart() error
 	Metadata() RuleSetMetadata
