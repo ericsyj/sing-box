@@ -465,6 +465,14 @@ match:
 				selectedRuleIndex = currentRuleIndex
 				break match
 			}
+		case *R.RuleActionSniffOverrideDestination:
+			if !preMatch {
+				r.actionSniffOverrideDestination(ctx, metadata, inputConn, inputPacketConn)
+			} else {
+				selectedRule = currentRule
+				selectedRuleIndex = currentRuleIndex
+				break match
+			}
 		case *R.RuleActionResolve:
 			fatalErr = r.actionResolve(ctx, metadata, action)
 			if fatalErr != nil {
@@ -475,7 +483,8 @@ match:
 		if actionType == C.RuleActionTypeRoute ||
 			actionType == C.RuleActionTypeReject ||
 			actionType == C.RuleActionTypeHijackDNS ||
-			(actionType == C.RuleActionTypeSniff && preMatch) {
+			(actionType == C.RuleActionTypeSniff && preMatch) ||
+			(actionType == C.RuleActionTypeSniffOverrideDestination && preMatch) {
 			selectedRule = currentRule
 			selectedRuleIndex = currentRuleIndex
 			break match
@@ -651,6 +660,28 @@ func (r *Router) actionSniff(
 		}
 	}
 	return
+}
+
+func (r *Router) actionSniffOverrideDestination(ctx context.Context, metadata *adapter.InboundContext, inputConn net.Conn, inputPacketConn N.PacketConn) {
+	if inputConn != nil {
+		if !metadata.Destination.IsFqdn() && M.IsDomainName(metadata.SniffHost) {
+			metadata.Destination = M.Socksaddr{
+				Fqdn: metadata.SniffHost,
+				Port: metadata.Destination.Port,
+			}
+			r.logger.DebugContext(ctx, "connection destination is overridden as ", metadata.SniffHost, ":", metadata.Destination.Port)
+		}
+	} else if inputPacketConn != nil {
+		if !metadata.Destination.IsFqdn() && M.IsDomainName(metadata.SniffHost) {
+			metadata.OriginDestination = metadata.Destination
+			metadata.Destination = M.Socksaddr{
+				Fqdn: metadata.SniffHost,
+				Port: metadata.Destination.Port,
+			}
+			metadata.DestOverride = true
+			r.logger.DebugContext(ctx, "packet connection destination is overridden as ", metadata.SniffHost, ":", metadata.Destination.Port)
+		}
+	}
 }
 
 func (r *Router) actionResolve(ctx context.Context, metadata *adapter.InboundContext, action *R.RuleActionResolve) error {
