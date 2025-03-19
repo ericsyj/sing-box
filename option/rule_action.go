@@ -7,7 +7,7 @@ import (
 	"time"
 
 	C "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-dns"
+	dns "github.com/sagernet/sing-dns"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/common/json/badjson"
@@ -288,6 +288,7 @@ type RouteActionSniff struct {
 }
 
 type RouteActionResolve struct {
-	Strategy DomainStrategy `json:"strategy,omitempty"`
-	Server   string         `json:"server,omitempty"`
+	Strategy  DomainStrategy `json:"strategy,omitempty"`
+	Server    string         `json:"server,omitempty"`
+	MatchOnly bool           `json:"match_only,omitempty"`
 }
