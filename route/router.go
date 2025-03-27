@@ -40,6 +40,7 @@ type Router struct {
 	dnsLogger               log.ContextLogger
 	inbound                 adapter.InboundManager
 	outbound                adapter.OutboundManager
+	provider                adapter.ProviderManager
 	connection              adapter.ConnectionManager
 	network                 adapter.NetworkManager
 	rules                   []adapter.Rule
@@ -68,15 +69,17 @@ type Router struct {
 	platformInterface       platform.Interface
 	needWIFIState           bool
 	started                 bool
+	reloadChan              chan<- struct{}
 }
 
-func NewRouter(ctx context.Context, logFactory log.Factory, options option.RouteOptions, dnsOptions option.DNSOptions) (*Router, error) {
+func NewRouter(ctx context.Context, logFactory log.Factory, options option.RouteOptions, dnsOptions option.DNSOptions, reloadChan chan<- struct{}) (*Router, error) {
 	router := &Router{
 		ctx:                   ctx,
 		logger:                logFactory.NewLogger("router"),
 		dnsLogger:             logFactory.NewLogger("dns"),
 		inbound:               service.FromContext[adapter.InboundManager](ctx),
 		outbound:              service.FromContext[adapter.OutboundManager](ctx),
+		provider:              service.FromContext[adapter.ProviderManager](ctx),
 		connection:            service.FromContext[adapter.ConnectionManager](ctx),
 		network:               service.FromContext[adapter.NetworkManager](ctx),
 		rules:                 make([]adapter.Rule, 0, len(options.Rules)),
@@ -92,6 +95,7 @@ func NewRouter(ctx context.Context, logFactory log.Factory, options option.Route
 		pauseManager:          service.FromContext[pause.Manager](ctx),
 		platformInterface:     service.FromContext[platform.Interface](ctx),
 		needWIFIState:         hasRule(options.Rules, isWIFIRule) || hasDNSRule(dnsOptions.Rules, isWIFIDNSRule),
+		reloadChan:            reloadChan,
 	}
 	service.MustRegister[adapter.Router](ctx, router)
 	router.dnsClient = dns.NewClient(dns.ClientOptions{
@@ -519,5 +523,14 @@ func (r *Router) ResetNetwork() {
 	r.network.ResetNetwork()
 	for _, transport := range r.transports {
 		transport.Reset()
+	}
+}
+
+func (r *Router) Reload() {
+	if r.platformInterface == nil {
+		select {
+		case r.reloadChan <- struct{}{}:
+		default:
+		}
 	}
 }
