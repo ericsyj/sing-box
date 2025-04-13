@@ -33,7 +33,7 @@ func (r RuleSet) MarshalJSON() ([]byte, error) {
 		var defaultFormat string
 		switch r.Type {
 		case C.RuleSetTypeLocal:
-			defaultFormat = ruleSetDefaultFormat(r.LocalOptions.Path)
+			defaultFormat = ruleSetDefaultFormat(r.Path)
 		case C.RuleSetTypeRemote:
 			defaultFormat = ruleSetDefaultFormat(r.RemoteOptions.URL)
 		}
@@ -84,7 +84,7 @@ func (r *RuleSet) UnmarshalJSON(bytes []byte) error {
 		if r.Format == "" {
 			switch r.Type {
 			case C.RuleSetTypeLocal:
-				r.Format = ruleSetDefaultFormat(r.LocalOptions.Path)
+				r.Format = ruleSetDefaultFormat(r.Path)
 			case C.RuleSetTypeRemote:
 				r.Format = ruleSetDefaultFormat(r.RemoteOptions.URL)
 			}
@@ -115,10 +115,6 @@ func ruleSetDefaultFormat(path string) string {
 	default:
 		return ""
 	}
-}
-
-type LocalRuleSet struct {
-	Path string `json:"path,omitempty"`
 }
 
 type RemoteRuleSet struct {

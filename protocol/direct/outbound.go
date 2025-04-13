@@ -195,7 +195,7 @@ func (h *Outbound) DialParallel(ctx context.Context, network string, destination
 			return nil, E.New("no IPv6 address available for ", destination)
 		}
 	}
-	conn, err := dialer.DialParallelNetwork(ctx, h.dialer, network, destination, destinationAddresses, domainStrategy == C.DomainStrategyPreferIPv6, nil, nil, nil, h.fallbackDelay)
+	conn, err := dialer.DialParallelNetwork(ctx, h.dialer, network, destination, destinationAddresses, domainStrategy == dns.DomainStrategyPreferIPv6, nil, nil, nil, h.fallbackDelay)
 	if err != nil {
 		return nil, err
 	}

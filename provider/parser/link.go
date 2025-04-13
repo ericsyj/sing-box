@@ -598,11 +598,11 @@ func parseHysteriaLinik(link string) (option.Outbound, error) {
 		case "ca_str":
 			TLSOptions.Certificate = strings.Split(value, "\n")
 		case "up":
-			options.Up = value
+			options.Up.UnmarshalJSON([]byte(value))
 		case "up_mbps":
 			options.UpMbps, _ = strconv.Atoi(value)
 		case "down":
-			options.Down = value
+			options.Down.UnmarshalJSON([]byte(value))
 		case "down_mbps":
 			options.DownMbps, _ = strconv.Atoi(value)
 		case "obfs", "obfsParam":
