@@ -1,0 +1,75 @@
+name: Build Core
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sing-box:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{steps.sing-box.outputs.version}}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: setup go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ~1.25.8
+
+      - name: get sing-box version
+        id: sing-box
+        run: |
+          git remote add sekai https://github.com/SagerNet/sing-box.git
+          git fetch --tags sekai
+          version=$(CGO_ENABLED=0 go run ./cmd/internal/read_tag)
+          echo version=$version >> $GITHUB_OUTPUT
+
+  build:
+    runs-on: ubuntu-latest
+    needs: sing-box
+    env:
+      TAGS: with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_clash_api,with_tailscale
+      VERSION: ${{needs.sing-box.outputs.version}}
+    steps:
+      - name: checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ~1.25.8
+
+      - name: Build core
+        run: |
+          CGO_ENABLED=0 GOARCH=arm64 GOOS=linux go build -v -trimpath -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=${VERSION}' -s -w -buildid=" -tags ${TAGS} ./cmd/sing-box
+          CGO_ENABLED=0 GOARCH=amd64 GOOS=windows GOAMD64=v3 go build -v -trimpath -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=${VERSION}' -s -w -buildid=" -tags ${TAGS} ./cmd/sing-box
+      
+      - name: Compress core by upx
+        run: |
+          UPX_VER=$(curl -s https://api.github.com/repos/upx/upx/releases/latest |
+              grep tag_name |
+              cut -d ":" -f2 |
+              sed 's/\"//g;s/\,//g;s/\ //g;s/v//' |
+              head -n 1)
+
+          curl -Lo upx.tar.xz "https://github.com/upx/upx/releases/download/v${UPX_VER}/upx-${UPX_VER}-amd64_linux.tar.xz"
+          tar -xf upx.tar.xz
+          chmod +x upx-${UPX_VER}-amd64_linux/upx
+          upx-${UPX_VER}-amd64_linux/upx --best ./sing-box.exe
+          upx-${UPX_VER}-amd64_linux/upx --best ./sing-box
+
+      - name: Upload windows core to artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sing-box_win_amd64
+          path: sing-box.exe
+
+      - name: Upload linux-arm64 core to artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sing-box_linux_arm64
+          path: sing-box
