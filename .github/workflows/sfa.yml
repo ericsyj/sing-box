@@ -9,12 +9,12 @@ jobs:
     outputs:
       version: ${{steps.sing-box.outputs.version}}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: setup go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ~1.25.8
 
@@ -32,17 +32,17 @@ jobs:
     env:
       VERSION: ${{ needs.sing-box.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: setup go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ~1.25.8
 
       - name: checkout app repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: sfa
           repository: SagerNet/sing-box-for-android
@@ -100,35 +100,35 @@ jobs:
           keyStorePassword: ${{secrets.KEY_STORE_PASSWORD}}
 
       - name: upload arm64-v8a apk
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sfa-${{env.VERSION}}-arm64-v8a
           path: sfa/app/build/outputs/apk/other/release/*-arm64-v8a-signed.apk
           compression-level: 9
 
       - name: upload armeabi-v7a apk
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sfa-${{env.VERSION}}-armeabi-v7a
           path: sfa/app/build/outputs/apk/other/release/*-armeabi-v7a-signed.apk
           compression-level: 9
 
       - name: upload x86_64 apk
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sfa-${{env.VERSION}}-x86_64
           path: sfa/app/build/outputs/apk/other/release/*-x86_64-signed.apk
           compression-level: 9
 
       - name: upload x86 apk
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sfa-${{env.VERSION}}-x86
           path: sfa/app/build/outputs/apk/other/release/*-x86-signed.apk
           compression-level: 9
 
       - name: upload universal apk
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sfa-${{env.VERSION}}-universal
           path: sfa/app/build/outputs/apk/other/release/*-universal-signed.apk
