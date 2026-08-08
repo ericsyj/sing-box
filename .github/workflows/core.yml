@@ -1,0 +1,143 @@
+name: Build Core
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sing-box:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{steps.sing-box.outputs.version}}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: setup go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.x
+
+      - name: get sing-box version
+        id: sing-box
+        run: |
+          git remote add sekai https://github.com/SagerNet/sing-box.git
+          git fetch --tags sekai
+          version=$(CGO_ENABLED=0 go run ./cmd/internal/read_tag)
+          echo version=$version >> $GITHUB_OUTPUT
+
+  build:
+    runs-on: ubuntu-latest
+    needs: sing-box
+    env:
+      TAGS: with_gvisor,with_quic,with_dhcp,with_wireguard,with_utls,with_acme,with_clash_api,with_tailscale,with_ccm,with_ocm,with_cloudflared,with_naive_outbound,with_usbip,with_openvpn,with_openconnect,badlinkname,tfogo_checklinkname0
+      VERSION: ${{needs.sing-box.outputs.version}}
+    steps:
+      - name: checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      
+      - name: checkout target
+        uses: actions/checkout@v4
+        with:
+          ref: core-release
+          path: target
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.x
+      - name: Clone cronet-go
+        run: |
+          set -xeuo pipefail
+          CRONET_GO_VERSION=$(cat .github/CRONET_GO_VERSION)
+          git init ~/cronet-go
+          git -C ~/cronet-go remote add origin https://github.com/sagernet/cronet-go.git
+          git -C ~/cronet-go sparse-checkout set --no-cone '/*' '!/lib'
+          git -C ~/cronet-go fetch --depth=1 --filter=blob:none origin "$CRONET_GO_VERSION"
+          git -C ~/cronet-go checkout FETCH_HEAD
+          git -C ~/cronet-go submodule update --init --recursive --depth=1
+      - name: Cache Chromium toolchain
+        id: cache-chromium-toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/cronet-go/naiveproxy/src/third_party/llvm-build/Release+Asserts
+            ~/cronet-go/naiveproxy/src/out/sysroot-build
+          key: chromium-toolchain-arm64-musl-${{ hashFiles('.github/CRONET_GO_VERSION') }}
+      - name: Download Chromium toolchain
+        run: |
+          set -xeuo pipefail
+          cd ~/cronet-go
+          go run ./cmd/build-naive --target=linux/arm64 --libc=musl download-toolchain
+      - name: Set Chromium toolchain environment
+        run: |
+          set -xeuo pipefail
+          cd ~/cronet-go
+          go run ./cmd/build-naive --target=linux/arm64 --libc=musl env >> $GITHUB_ENV
+
+      - name: Build core
+        run: |
+          CGO_ENABLED=1 GOARCH=arm64 GOOS=linux go build -v -trimpath -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=${VERSION}' -X 'runtime.godebugDefault=multipathtcp=0,tlssha1=1,tlsunsafeekm=1' -checklinkname=0 -s -w -buildid=" -tags "${TAGS},with_musl" ./cmd/sing-box
+          CGO_ENABLED=0 GOARCH=amd64 GOOS=windows GOAMD64=v3 go build -v -trimpath -ldflags "-X 'github.com/sagernet/sing-box/constant.Version=${VERSION}' -X 'runtime.godebugDefault=multipathtcp=0,tlssha1=1,tlsunsafeekm=1' -checklinkname=0 -s -w -buildid=" -tags "${TAGS},with_purego" ./cmd/sing-box
+      
+      - name: Compress core by upx
+        run: |
+          UPX_VER=$(curl -s https://api.github.com/repos/upx/upx/releases/latest |
+              grep tag_name |
+              cut -d ":" -f2 |
+              sed 's/\"//g;s/\,//g;s/\ //g;s/v//' |
+              head -n 1)
+
+          curl -Lo upx.tar.xz "https://github.com/upx/upx/releases/download/v${UPX_VER}/upx-${UPX_VER}-amd64_linux.tar.xz"
+          tar -xf upx.tar.xz
+          chmod +x upx-${UPX_VER}-amd64_linux/upx
+          upx-${UPX_VER}-amd64_linux/upx --best ./sing-box
+
+          VERSION=$(curl -s https://api.github.com/repos/SagerNet/cronet-go/releases/latest |
+              grep tag_name |
+              cut -d ":" -f2 |
+              sed 's/\"//g;s/\,//g;s/\ //g;s/v//' |
+              head -n 1)
+
+          set -xeuo pipefail
+          CRONET_GO_VERSION=$(cat .github/CRONET_GO_VERSION)
+          LIBRARY_PATH="lib/windows_amd64/libcronet.dll"
+          git init "$RUNNER_TEMP/cronet-go-lib"
+          git -C "$RUNNER_TEMP/cronet-go-lib" remote add origin https://github.com/sagernet/cronet-go.git
+          git -C "$RUNNER_TEMP/cronet-go-lib" sparse-checkout set --no-cone "/$LIBRARY_PATH"
+          git -C "$RUNNER_TEMP/cronet-go-lib" fetch --depth=1 --filter=blob:none origin "$CRONET_GO_VERSION"
+          git -C "$RUNNER_TEMP/cronet-go-lib" checkout FETCH_HEAD
+          cp "$RUNNER_TEMP/cronet-go-lib/$LIBRARY_PATH" $GITHUB_WORKSPACE/
+
+      - name: Upload windows core to artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sing-box_win_amd64
+          path: |
+            sing-box.exe
+            libcronet.dll
+
+      - name: Upload linux-arm64 core to artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sing-box_linux_arm64
+          path: sing-box
+
+      - name: Upload core to core-release repo
+        run: |
+          zip sing-box.zip ./sing-box.exe ./libcronet.dll
+          mv -f ./sing-box.zip ${{ github.workspace }}/target/sing-box-main-next-pro_win_amd64.zip
+          mv -f ./sing-box ${{ github.workspace }}/target/sing-box-main-next-pro_linux_arm64
+          echo ${VERSION} > ${{ github.workspace }}/target/version-main-next-pro.txt
+          cd ${{ github.workspace }}/target
+          tar -zcvf sing-box-main-next-pro_linux_arm64.tar.gz sing-box-main-next-pro_linux_arm64
+          if [[ -n $(git status --porcelain) ]]; then
+            git config --global user.email "github-actions[bot]@example.com"
+            git config --global user.name "github-actions[bot]"
+            git add .
+            git commit --amend --no-edit
+            git push -f
+          fi
