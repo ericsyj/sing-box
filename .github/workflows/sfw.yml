@@ -1,0 +1,282 @@
+name: Build SFW
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_windows_client:
+    name: Build Windows client (${{ matrix.desktop_arch }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - desktop_arch: x64
+            rust_target: x86_64-pc-windows-msvc
+            cronet_module: github.com/sagernet/cronet-go/lib/windows_amd64
+          - desktop_arch: x86
+            rust_target: i686-pc-windows-msvc
+            cronet_module: ""
+          - desktop_arch: arm64
+            rust_target: aarch64-pc-windows-msvc
+            cronet_module: github.com/sagernet/cronet-go/lib/windows_arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Checkout desktop client
+        uses: actions/checkout@v6
+        with:
+          repository: SagerNet/sing-box-for-desktop
+          ref: main
+          path: clients/desktop
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Check fork build inputs
+        shell: bash
+        run: |
+          set -uo pipefail
+          missing=0
+          for required in \
+            cmd/internal/build_boxdd \
+            experimental/boxdd \
+            experimental/boxdd/desktop_service.proto \
+            daemon/started_service.proto \
+            daemon/managed_service.proto \
+            release/DEFAULT_BUILD_TAGS_WINDOWS \
+            release/DEFAULT_BUILD_TAGS_OTHERS \
+            common/windivert/assets/WinDivert32.sys \
+            common/windivert/assets/WinDivert64.sys
+          do
+            if [[ ! -e "$required" ]]; then
+              echo "::error::the desktop client requires $required, which is missing from this branch"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      # This branch renames the service, the application executable the daemon is willing to
+      # talk to and the product name it accepts updates from, while the upstream client is
+      # still built under the sing-box names.
+      - name: Align desktop client with fork identifiers
+        id: fork
+        run: |-
+          function Read-ForkName($path, $description, $pattern) {
+            $source = Get-Content $path -Raw
+            if ($source -notmatch $pattern) {
+              throw "$path declares no $description"
+            }
+            return $Matches.name
+          }
+          $applicationExecutable = Read-ForkName "experimental/boxdd/peer_windows.go" "application executable name" '(?m)^\s*applicationExecutableName\s*=\s*"(?<name>[^"]+)\.exe"'
+          $productName = Read-ForkName "experimental/boxdd/update_windows.go" "product name" '(?m)^\s*updateProductName\s*=\s*"(?<name>[^"]+)"'
+          $serviceName = Read-ForkName "experimental/boxdd/main.go" "service name" '(?m)^const serviceName\s*=\s*"(?<name>[^"]+)"'
+          Write-Output "executable: $applicationExecutable.exe, product: $productName, service: $serviceName"
+
+          $builderPath = "clients/desktop/electron-builder.yml"
+          $builder = [System.Collections.Generic.List[string]]::new()
+          $renamedProduct = $false
+          $renamedExecutable = $false
+          foreach ($line in Get-Content $builderPath) {
+            if ($line -eq "productName: sing-box") {
+              $builder.Add("productName: $productName")
+              $renamedProduct = $true
+              continue
+            }
+            $builder.Add($line)
+            if ($line -eq "win:") {
+              $builder.Add("  executableName: $applicationExecutable")
+              $renamedExecutable = $true
+            }
+          }
+          if (-not $renamedProduct) {
+            throw "$builderPath declares no sing-box product name"
+          }
+          if (-not $renamedExecutable) {
+            throw "$builderPath declares no Windows section"
+          }
+          Set-Content -Path $builderPath -Value $builder -Encoding utf8NoBOM
+
+          $installerPath = "clients/desktop/build/installer.nsh"
+          $installer = Get-Content $installerPath -Raw
+          if ($installer -notmatch '-Name sing-box-daemon(?![-\w])') {
+            throw "$installerPath does not control the sing-box-daemon service"
+          }
+          $patchedInstaller = $installer -replace '-Name sing-box-daemon(?![-\w])', "-Name $serviceName"
+          Set-Content -Path $installerPath -Value $patchedInstaller -Encoding utf8NoBOM -NoNewline
+
+          $preflightPath = "clients/desktop/build/installer-preflight.ps1"
+          $preflight = Get-Content $preflightPath -Raw
+          $serviceIdentity = 'Get-ServiceSid "sing-box-daemon"'
+          if (-not $preflight.Contains($serviceIdentity)) {
+            throw "$preflightPath does not derive the sing-box-daemon service identity"
+          }
+          $patchedPreflight = $preflight.Replace($serviceIdentity, "Get-ServiceSid `"$serviceName`"")
+          Set-Content -Path $preflightPath -Value $patchedPreflight -Encoding utf8NoBOM -NoNewline
+
+          "application_executable=$applicationExecutable" >> $env:GITHUB_OUTPUT
+
+      # The daemon version comes from git describe, and a forked repository only carries the
+      # tags that existed when it was created.
+      - name: Set tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-recurse-submodules --tags https://github.com/SagerNet/sing-box.git
+          if ! git describe --tags > /dev/null 2>&1; then
+            echo "::warning::no tag is reachable from HEAD, tagging it as v0.0.0"
+            git tag -f v0.0.0
+          fi
+          git describe --tags
+
+      - name: Read required Go version
+        id: go
+        run: |-
+          $metadata = Get-Content clients/desktop/version.json -Raw | ConvertFrom-Json
+          if ($metadata.go_version -notmatch '^go[0-9]+\.[0-9]+(\.[0-9]+)?$') {
+            throw "clients/desktop/version.json contains no valid Go version"
+          }
+          "version=$($metadata.go_version -replace '^go', '')" >> $env:GITHUB_OUTPUT
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          cache: false
+
+      - name: Cache Go modules
+        uses: actions/cache@v6
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-desktop-windows-${{ hashFiles('go.sum') }}
+          restore-keys: go-mod-desktop-windows-
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Windows sharing module
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            clients/desktop/bin/windows-share-toolchain/cargo-target
+          key: windows-share-${{ matrix.rust_target }}-${{ hashFiles('clients/desktop/native/windows-share/Cargo.lock') }}
+          restore-keys: windows-share-${{ matrix.rust_target }}-
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          package_json_file: clients/desktop/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: clients/desktop/package.json
+          cache: pnpm
+          cache-dependency-path: |
+            clients/desktop/pnpm-lock.yaml
+            clients/desktop/dashboard/pnpm-lock.yaml
+
+      - name: Set application version
+        id: application
+        run: |-
+          $versionPath = "clients/desktop/version.json"
+          $metadata = Get-Content $versionPath -Raw | ConvertFrom-Json
+          if ([string]::IsNullOrWhiteSpace($metadata.version)) {
+            throw "$versionPath contains no application version"
+          }
+          $metadata.version = "$($metadata.version)-$(git rev-parse --short HEAD)"
+          $metadata | ConvertTo-Json | Set-Content -Encoding utf8NoBOM $versionPath
+          Get-Content $versionPath
+          "version=$($metadata.version)" >> $env:GITHUB_OUTPUT
+
+      # The packaging script stages libcronet.dll out of the module cache, and this branch
+      # builds the daemon with with_purego, so the library module is never downloaded as a
+      # build dependency.
+      - name: Download Cronet library
+        if: matrix.cronet_module != ''
+        run: |-
+          go mod download ${{ matrix.cronet_module }}
+
+      - name: Setup signing
+        run: |-
+          $certificatePath = Join-Path $env:RUNNER_TEMP "windows-signing.p12"
+          $certificatePassword = [Guid]::NewGuid().ToString()
+          $certificate = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject "CN=sing-box nightly" `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -KeyExportPolicy Exportable `
+            -NotAfter (Get-Date).AddYears(10)
+          Export-PfxCertificate `
+            -Cert $certificate `
+            -FilePath $certificatePath `
+            -Password (ConvertTo-SecureString -String $certificatePassword -Force -AsPlainText) | Out-Null
+          @{
+            windows = @{
+              certificateFile = $certificatePath
+              certificatePassword = $certificatePassword
+            }
+          } | ConvertTo-Json -Depth 3 | Set-Content -Encoding utf8NoBOM clients/desktop/signing.local.json
+
+      - name: Install dependencies
+        run: |-
+          pnpm -C clients/desktop install
+
+      - name: Build
+        run: |-
+          pnpm -C clients/desktop package:win -- ${{ matrix.desktop_arch }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The daemon refuses to install itself unless the application sits next to it under the
+      # expected name and carries the same signing certificate.
+      - name: Verify installation layout
+        run: |-
+          $unpacked = @(Get-ChildItem clients/desktop/release -Directory -Filter win*unpacked)
+          if ($unpacked.Count -ne 1) {
+            throw "expected 1 unpacked application, found $($unpacked.Count)"
+          }
+          $paths = @(
+            Join-Path $unpacked[0].FullName "${{ steps.fork.outputs.application_executable }}.exe"
+            Join-Path $unpacked[0].FullName "resources/daemon/sing-box-daemon.exe"
+          )
+          $thumbprints = foreach ($path in $paths) {
+            if (-not (Test-Path $path)) {
+              throw "the daemon requires $path, which the packaged application does not contain"
+            }
+            $certificate = (Get-AuthenticodeSignature $path).SignerCertificate
+            if ($null -eq $certificate) {
+              throw "$path carries no Authenticode signature"
+            }
+            $certificate.Thumbprint
+          }
+          if ($thumbprints[0] -ne $thumbprints[1]) {
+            throw "the application and the daemon have different signing certificates"
+          }
+
+      - name: Prepare upload
+        run: |-
+          $artifacts = @(Get-ChildItem clients/desktop/release/SFW-*.exe -File)
+          if ($artifacts.Count -ne 1) {
+            throw "expected 1 Windows installer for ${{ matrix.desktop_arch }}, found $($artifacts.Count)"
+          }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item $artifacts.FullName dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sfw-${{ steps.application.outputs.version }}-${{ matrix.desktop_arch }}
+          path: dist
+          compression-level: 0
