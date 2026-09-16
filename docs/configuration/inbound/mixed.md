@@ -41,4 +41,7 @@ No authentication required if empty.
 
     To work on Android and Apple platforms without privileges, use tun.platform.http_proxy instead.
 
+    On Windows, the graphical client daemon runs as LocalSystem. `set_system_proxy`
+    is applied to the logged-on owner's user hive, including Microsoft accounts.
+
 Automatically set system proxy configuration when start and clean up when stop.

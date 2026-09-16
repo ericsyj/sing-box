@@ -4,7 +4,15 @@ icon: material/alert-decagram
 
 #### 1.14.0-beta.10
 
+* Fix Windows GUI daemon `set_system_proxy` for Microsoft accounts **1**
 * Fixes and improvements
+
+**1**:
+
+The Windows GUI daemon runs as LocalSystem. mixed/http `set_system_proxy`
+now impersonates the logged-on owner and writes that user's Internet Settings
+hive, so system proxy applies when the computer is signed in with a Microsoft
+account.
 
 #### 1.14.0-beta.7
 

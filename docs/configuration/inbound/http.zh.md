@@ -44,4 +44,7 @@ HTTP 用户
 
     要在无特权的 Android 和 iOS 上工作，请改用 tun.platform.http_proxy。
 
+    在 Windows 上，图形客户端的 daemon 以 LocalSystem 运行。`set_system_proxy`
+    会写入当前登录用户（包括微软账户）的 Internet Settings，而不是服务账户本身。
+
 启动时自动设置系统代理，停止时自动清理。
