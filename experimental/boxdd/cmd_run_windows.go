@@ -4,13 +4,18 @@ import (
 	"os"
 	"runtime"
 	"time"
+	"unsafe"
 
 	E "github.com/sagernet/sing/common/exceptions"
 	F "github.com/sagernet/sing/common/format"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
+	"golang.org/x/sys/windows/svc/mgr"
 )
+
+const windowsServiceStopWaitHint = 30 * time.Second
 
 var commandRunFlagAllowUnsafeInstallation bool
 
@@ -82,7 +87,10 @@ func (s *windowsService) Execute(arguments []string, requests <-chan svc.ChangeR
 		serviceLogError(err)
 		return
 	}
-	statuses <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptSessionChange}
+	_ = windows.SetProcessShutdownParameters(0x3FF, 0)
+	configureWindowsServicePreshutdownTimeout()
+	accepted := svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPreShutdown | svc.AcceptSessionChange
+	statuses <- svc.Status{State: svc.Running, Accepts: accepted}
 	runtime.GC()
 	for request := range requests {
 		if request.Cmd == svc.Interrogate {
@@ -96,13 +104,26 @@ func (s *windowsService) Execute(arguments []string, requests <-chan svc.ChangeR
 			}
 			continue
 		}
+		if request.Cmd == svc.PreShutdown {
+			statuses <- svc.Status{
+				State:    svc.Running,
+				Accepts:  accepted,
+				WaitHint: uint32(windowsServiceStopWaitHint / time.Millisecond),
+			}
+			d.flushSystemProxy()
+			continue
+		}
 		if request.Cmd == svc.Stop || request.Cmd == svc.Shutdown {
+			d.flushSystemProxy()
 			break
 		}
 		serviceLogError(E.New("unexpected service command: ", uint32(request.Cmd)))
 	}
-	statuses <- svc.Status{State: svc.StopPending}
-	watchdog := time.AfterFunc(3*time.Second, func() {
+	statuses <- svc.Status{
+		State:    svc.StopPending,
+		WaitHint: uint32(windowsServiceStopWaitHint / time.Millisecond),
+	}
+	watchdog := time.AfterFunc(windowsServiceStopWaitHint, func() {
 		serviceLogError(E.New("daemon did not close"))
 		os.Exit(1)
 	})
@@ -110,6 +131,29 @@ func (s *windowsService) Execute(arguments []string, requests <-chan svc.ChangeR
 	watchdog.Stop()
 	statuses <- svc.Status{State: svc.Stopped}
 	return
+}
+
+type windowsServicePreshutdownInfo struct {
+	timeout uint32
+}
+
+func configureWindowsServicePreshutdownTimeout() {
+	manager, err := mgr.Connect()
+	if err != nil {
+		return
+	}
+	defer manager.Disconnect()
+	service, err := manager.OpenService(serviceName)
+	if err != nil {
+		return
+	}
+	defer service.Close()
+	_ = configureInstalledServicePreshutdownTimeout(service)
+}
+
+func configureInstalledServicePreshutdownTimeout(service *mgr.Service) error {
+	info := windowsServicePreshutdownInfo{timeout: uint32(windowsServiceStopWaitHint / time.Millisecond)}
+	return windows.ChangeServiceConfig2(service.Handle, windows.SERVICE_CONFIG_PRESHUTDOWN_INFO, (*byte)(unsafe.Pointer(&info)))
 }
 
 func serviceLogError(err error) {
