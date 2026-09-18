@@ -208,6 +208,11 @@ func serviceInstall() error {
 		rollback()
 		return E.Cause(err, "secure service")
 	}
+	err = configureInstalledServicePreshutdownTimeout(service)
+	if err != nil {
+		rollback()
+		return E.Cause(err, "set preshutdown timeout")
+	}
 	err = eventlog.InstallAsEventCreate(serviceName, eventlog.Error|eventlog.Warning|eventlog.Info)
 	if err != nil && !strings.Contains(err.Error(), "already exists") {
 		rollback()
