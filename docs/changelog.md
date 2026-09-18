@@ -9,6 +9,7 @@ icon: material/alert-decagram
 #### 1.15.0-alpha.5
 
 * Add Tailcat support **1**
+* Fix Windows `set_system_proxy` from LocalSystem services **2**
 * Fixes and improvements
 
 **1**:
@@ -20,6 +21,15 @@ See [Tailcat Inbound](/configuration/inbound/tailcat/) and [Tailcat Outbound](/c
 
 The DERP service can verify Tailcat clients with the new `verify_client_inbound` and `verify_client_key` options,
 see [DERP Service](/configuration/service/derp/#verify_client_inbound).
+
+**2**:
+
+Windows mixed/http `set_system_proxy` writes the logged-on user's Internet
+Settings hive from LocalSystem (GUI daemon and CLI services), including
+Microsoft accounts. The inbound still starts when no interactive session
+exists yet, and the proxy is applied when a user logs on. Service
+preshutdown clears the hive before it is unloaded so leftover proxy
+settings do not survive reboot.
 
 #### 1.15.0-alpha.4
 

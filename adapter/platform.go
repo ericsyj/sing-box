@@ -62,6 +62,13 @@ type PlatformInterface interface {
 	CreateAutoRedirect(options AutoRedirectOptions) (AutoRedirectSession, error)
 }
 
+// UserOperationRunner runs an operation in the interactive owner's security context.
+// Windows GUI daemons implement this so HKCU-based settings such as system proxy
+// apply to the logged-on user instead of LocalSystem.
+type UserOperationRunner interface {
+	RunUserOperation(operation func() error) error
+}
+
 type AutoRedirectOptions struct {
 	TunOptions                     *tun.Options
 	TableName                      string
