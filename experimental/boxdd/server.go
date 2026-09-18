@@ -159,6 +159,12 @@ func (d *Daemon) restore() {
 		d.logger.Warn("tag OOM reports: ", err)
 	}
 	if !options.WasRunning {
+		if d.platform != nil {
+			err = d.platform.ClearOwnerSystemProxy(ownerUserID)
+			if err != nil {
+				d.logger.Warn("clear leftover system proxy: ", err)
+			}
+		}
 		return
 	}
 	if d.platform != nil {
@@ -283,6 +289,7 @@ func (d *Daemon) stopServiceLocked(ownerUserID string) error {
 func (d *Daemon) Close() {
 	d.lifecycleAccess.Lock()
 	d.closed = true
+	d.flushSystemProxyLocked()
 	d.lifecycleAccess.Unlock()
 	d.server.Stop()
 	d.lifecycleAccess.Lock()
@@ -296,6 +303,27 @@ func (d *Daemon) Close() {
 		_ = d.platform.Close()
 	}
 	d.lifecycleAccess.Unlock()
+}
+
+func (d *Daemon) flushSystemProxy() {
+	d.lifecycleAccess.Lock()
+	defer d.lifecycleAccess.Unlock()
+	d.flushSystemProxyLocked()
+}
+
+func (d *Daemon) flushSystemProxyLocked() {
+	if d.platform != nil {
+		ownerUserID, err := loadOwner()
+		if err == nil && ownerUserID != "" {
+			_ = d.platform.ClearOwnerSystemProxy(ownerUserID)
+		} else {
+			_ = d.platform.ClearOwnerSystemProxy("")
+		}
+		_ = d.platform.ResetPlatformOptions()
+	}
+	if d.startedService != nil {
+		_ = d.startedService.CloseService()
+	}
 }
 
 func (d *Daemon) disconnectPeerConnectionsExcept(userID string) {

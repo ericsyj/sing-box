@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -252,13 +253,8 @@ func (p *windowsPlatformInterface) PrepareOwner(identity peerIdentity) error {
 	if p.token != 0 && p.ownerUserID == identity.UserID && p.sessionID == identity.SessionID {
 		return p.applySystemProxyLocked()
 	}
-	token, err := p.daemon.duplicatePeerImpersonationToken(identity)
+	token, err := p.ownerTokenForIdentity(identity)
 	if err != nil {
-		return err
-	}
-	err = validateImpersonationToken(token, identity.UserID, identity.SessionID)
-	if err != nil {
-		token.Close()
 		return err
 	}
 	err = p.replaceOwnerTokenLocked(identity.UserID, identity.SessionID, token)
@@ -271,25 +267,39 @@ func (p *windowsPlatformInterface) PrepareOwner(identity peerIdentity) error {
 func (p *windowsPlatformInterface) RestoreOwner(state ownerState) error {
 	p.access.Lock()
 	defer p.access.Unlock()
+	if p.token != 0 {
+		_ = p.closeOwnerTokenLocked()
+	}
 	p.ownerUserID = state.UserID
-	p.sessionID = state.SessionID
+	p.sessionID = 0
 	if listenAddress != "" {
 		return nil
 	}
-	if state.SessionID == 0 {
-		return E.New("missing owner session")
-	}
-	token, err := querySessionImpersonationToken(state.SessionID)
+	token, sessionID, err := restoreWindowsOwnerToken(state)
 	if err != nil {
-		return err
+		return nil
 	}
-	err = validateImpersonationToken(token, state.UserID, state.SessionID)
-	if err != nil {
-		token.Close()
-		return err
-	}
+	p.sessionID = sessionID
 	p.token = token
 	return nil
+}
+
+func restoreWindowsOwnerToken(state ownerState) (windows.Token, uint32, error) {
+	if settings.IsUsableWindowsSessionID(state.SessionID) {
+		token, err := querySessionUserToken(state.SessionID)
+		if err == nil {
+			userID, tokenSessionID, idErr := impersonationTokenIdentity(token)
+			if idErr == nil && tokenSessionID == state.SessionID && sameWindowsOwnerUser(userID, state.UserID) {
+				return token, state.SessionID, nil
+			}
+			_ = token.Close()
+		}
+	}
+	return settings.LookupWindowsUserSessionToken(state.UserID)
+}
+
+func sameWindowsOwnerUser(userID string, expectedUserID string) bool {
+	return userID == expectedUserID || strings.EqualFold(userID, expectedUserID)
 }
 
 func (p *windowsPlatformInterface) ReleaseOwner() error {
@@ -345,6 +355,18 @@ func (p *windowsPlatformInterface) SetSystemProxyEnabled(enabled bool) error {
 	return nil
 }
 
+func (p *windowsPlatformInterface) ClearOwnerSystemProxy(userID string) error {
+	var err error
+	if userID != "" {
+		err = settings.ClearWindowsUserSystemProxy(userID)
+	}
+	persisted := settings.PersistedWindowsProxyUserSID()
+	if persisted != "" && persisted != userID {
+		err = E.Errors(err, settings.ClearWindowsUserSystemProxy(persisted))
+	}
+	return err
+}
+
 func (p *windowsPlatformInterface) HandleSessionChange(eventType uint32, sessionID uint32, state ownerState) (uint32, bool, error) {
 	p.access.Lock()
 	defer p.access.Unlock()
@@ -352,7 +374,9 @@ func (p *windowsPlatformInterface) HandleSessionChange(eventType uint32, session
 		if p.sessionID != sessionID {
 			return 0, false, nil
 		}
-		return 0, false, p.releaseOwnerLocked()
+		clearErr := settings.ClearWindowsUserSystemProxy(p.ownerUserID)
+		releaseErr := p.releaseOwnerLocked()
+		return 0, false, E.Errors(clearErr, releaseErr)
 	}
 	if eventType != windows.WTS_SESSION_LOGON &&
 		eventType != windows.WTS_CONSOLE_CONNECT &&
@@ -360,7 +384,7 @@ func (p *windowsPlatformInterface) HandleSessionChange(eventType uint32, session
 		eventType != windows.WTS_SESSION_UNLOCK {
 		return 0, false, nil
 	}
-	token, err := querySessionImpersonationToken(sessionID)
+	token, err := querySessionUserToken(sessionID)
 	if err != nil {
 		return 0, false, err
 	}
@@ -369,7 +393,11 @@ func (p *windowsPlatformInterface) HandleSessionChange(eventType uint32, session
 		token.Close()
 		return 0, false, err
 	}
-	if userID != state.UserID || tokenSessionID != sessionID {
+	if tokenSessionID != sessionID {
+		token.Close()
+		return 0, false, nil
+	}
+	if !sameWindowsOwnerUser(userID, state.UserID) {
 		token.Close()
 		return 0, false, nil
 	}
@@ -399,6 +427,17 @@ func (d *Daemon) handlePlatformSessionChange(eventType uint32, sessionID uint32)
 	}
 	if !changed {
 		return nil
+	}
+	if d.startedService.Instance() == nil {
+		clearErr := d.platform.ClearOwnerSystemProxy(state.UserID)
+		if clearErr != nil {
+			d.logger.Warn("clear leftover system proxy: ", clearErr)
+		}
+	} else {
+		reapplyErr := settings.ReapplyPersistedWindowsSystemProxy()
+		if reapplyErr != nil {
+			d.logger.Warn("reapply system proxy: ", reapplyErr)
+		}
 	}
 	return saveOwner(state.UserID, newSessionID)
 }
@@ -432,12 +471,15 @@ func (p *windowsPlatformInterface) disableSystemProxyLocked() error {
 	return p.runUserOperationLocked(p.systemProxy.Disable)
 }
 
+func (p *windowsPlatformInterface) RunUserOperation(operation func() error) error {
+	p.access.Lock()
+	defer p.access.Unlock()
+	return p.runUserOperationLocked(operation)
+}
+
 func (p *windowsPlatformInterface) runUserOperationLocked(operation func() error) error {
-	if listenAddress != "" {
+	if listenAddress != "" || p.token == 0 {
 		return operation()
-	}
-	if p.token == 0 {
-		return nil
 	}
 	return runImpersonated(p.token, operation)
 }
@@ -485,7 +527,21 @@ func runImpersonated(token windows.Token, operation func() error) error {
 	result := make(chan error, 1)
 	go func() {
 		runtime.LockOSThread()
-		err := windows.SetThreadToken(nil, token)
+		var impersonationToken windows.Token
+		err := impersonateLoggedOnUser(token)
+		if err != nil {
+			err = windows.SetThreadToken(nil, token)
+		}
+		if err != nil {
+			impersonationToken, err = duplicateImpersonationToken(token)
+			if err == nil {
+				err = windows.SetThreadToken(nil, impersonationToken)
+				if err != nil {
+					_ = impersonationToken.Close()
+					impersonationToken = 0
+				}
+			}
+		}
 		if err != nil {
 			runtime.UnlockOSThread()
 			result <- E.Cause(err, "impersonate owner")
@@ -493,6 +549,9 @@ func runImpersonated(token windows.Token, operation func() error) error {
 		}
 		operationError := operation()
 		revertError := windows.RevertToSelf()
+		if impersonationToken != 0 {
+			_ = impersonationToken.Close()
+		}
 		if revertError == nil {
 			runtime.UnlockOSThread()
 		} else {
@@ -503,7 +562,43 @@ func runImpersonated(token windows.Token, operation func() error) error {
 	return <-result
 }
 
-func querySessionImpersonationToken(sessionID uint32) (windows.Token, error) {
+var procImpersonateLoggedOnUser = windows.NewLazySystemDLL("advapi32.dll").NewProc("ImpersonateLoggedOnUser")
+
+func impersonateLoggedOnUser(token windows.Token) error {
+	r1, _, err := syscall.SyscallN(procImpersonateLoggedOnUser.Addr(), uintptr(token))
+	if r1 == 0 {
+		if err == syscall.Errno(0) {
+			return syscall.EINVAL
+		}
+		return err
+	}
+	return nil
+}
+
+func (p *windowsPlatformInterface) ownerTokenForIdentity(identity peerIdentity) (windows.Token, error) {
+	processToken, err := p.daemon.duplicatePeerImpersonationToken(identity)
+	if err != nil {
+		return 0, err
+	}
+	err = validateImpersonationToken(processToken, identity.UserID, identity.SessionID)
+	if err != nil {
+		processToken.Close()
+		return 0, err
+	}
+	sessionToken, sessionErr := querySessionUserToken(identity.SessionID)
+	if sessionErr != nil {
+		return processToken, nil
+	}
+	err = validateSessionToken(sessionToken, identity.SessionID)
+	if err != nil {
+		sessionToken.Close()
+		return processToken, nil
+	}
+	processToken.Close()
+	return sessionToken, nil
+}
+
+func querySessionUserToken(sessionID uint32) (windows.Token, error) {
 	var primaryToken windows.Token
 	err := winio.RunWithPrivileges([]string{seTcbPrivilege}, func() error {
 		return windows.WTSQueryUserToken(sessionID, &primaryToken)
@@ -511,8 +606,7 @@ func querySessionImpersonationToken(sessionID uint32) (windows.Token, error) {
 	if err != nil {
 		return 0, E.Cause(err, "query session user token")
 	}
-	defer primaryToken.Close()
-	return duplicateImpersonationToken(primaryToken)
+	return primaryToken, nil
 }
 
 func duplicateImpersonationToken(token windows.Token) (windows.Token, error) {
@@ -536,8 +630,22 @@ func validateImpersonationToken(token windows.Token, expectedUserID string, expe
 	if err != nil {
 		return err
 	}
-	if userID != expectedUserID || sessionID != expectedSessionID {
+	if sessionID != expectedSessionID {
 		return E.New("owner token identity does not match authenticated application")
+	}
+	if !sameWindowsOwnerUser(userID, expectedUserID) {
+		return E.New("owner token identity does not match authenticated application")
+	}
+	return nil
+}
+
+func validateSessionToken(token windows.Token, expectedSessionID uint32) error {
+	_, sessionID, err := impersonationTokenIdentity(token)
+	if err != nil {
+		return err
+	}
+	if sessionID != expectedSessionID {
+		return E.New("session token does not match authenticated application session")
 	}
 	return nil
 }
@@ -566,4 +674,7 @@ func impersonationTokenIdentity(token windows.Token) (string, uint32, error) {
 	return userID, sessionID, nil
 }
 
-var _ daemonPlatform = (*windowsPlatformInterface)(nil)
+var (
+	_ daemonPlatform              = (*windowsPlatformInterface)(nil)
+	_ adapter.UserOperationRunner = (*windowsPlatformInterface)(nil)
+)
