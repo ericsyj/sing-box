@@ -4,7 +4,17 @@ icon: material/alert-decagram
 
 #### 1.14.2
 
+* Fix Windows `set_system_proxy` from LocalSystem services **1**
 * Fixes and improvements
+
+**1**:
+
+Windows mixed/http `set_system_proxy` writes the logged-on user's Internet
+Settings hive from LocalSystem (GUI daemon and CLI services), including
+Microsoft accounts. The inbound still starts when no interactive session
+exists yet, and the proxy is applied when a user logs on. Service
+preshutdown clears the hive before it is unloaded so leftover proxy
+settings do not survive reboot.
 
 #### 1.14.1
 

@@ -242,6 +242,10 @@ func (p *linuxPlatformInterface) ReleaseOwner() error {
 	return nil
 }
 
+func (p *linuxPlatformInterface) ClearOwnerSystemProxy(userID string) error {
+	return nil
+}
+
 func (p *linuxPlatformInterface) ResetPlatformOptions() error {
 	p.access.Lock()
 	defer p.access.Unlock()

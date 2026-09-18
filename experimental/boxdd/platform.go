@@ -15,6 +15,7 @@ type daemonPlatform interface {
 	SystemProxyStatus() (*daemon.SystemProxyStatus, error)
 	SetSystemProxyEnabled(enabled bool) error
 	HandleSessionChange(eventType uint32, sessionID uint32, state ownerState) (uint32, bool, error)
+	ClearOwnerSystemProxy(userID string) error
 	Close() error
 }
 
