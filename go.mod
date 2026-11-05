@@ -93,7 +93,7 @@ replace (
 	github.com/sagernet/sing-anytls => github.com/reF1nd/sing-anytls v0.0.0-20261005110320-ca02db16051a
 	github.com/sagernet/sing-quic => github.com/reF1nd/sing-quic v0.7.2-0.20261025120135-9783393d09e9
 	github.com/sagernet/sing-snell => github.com/reF1nd/sing-snell v0.0.0-20261023074937-e056cb336137
-	github.com/sagernet/sing-tun => github.com/reF1nd/sing-tun v0.9.7-0.20261104064145-fb4d24369d78
+	github.com/sagernet/sing-tun => github.com/ericsyj/sing-tun v0.9.7-0.20261105085317-a318ab0e779b
 	github.com/sagernet/tailscale => github.com/reF1nd/tailscale v1.102.1-sing-box-1.14-mod.5.0.20261023130017-22d26a5ce74c
 	github.com/sagernet/wireguard-go => github.com/reF1nd/wireguard-go v0.0.8-0.20261025115602-efd86415af1a
 )
