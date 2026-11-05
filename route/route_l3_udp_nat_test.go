@@ -33,7 +33,7 @@ func TestL3UDPDestinationNAT(t *testing.T) {
 		},
 	}
 	writeback := new(testL3NATWriteback)
-	dispatcher := tun.NewForwardDispatcher(handler, writeback, log.NewNOPFactory().NewLogger("forward"), tun.UDPNatOptions{}, 0)
+	dispatcher := tun.NewForwardDispatcher(handler, writeback, log.NewNOPFactory().NewLogger("forward"), 0, tun.UDPNatOptions{}, 0)
 	defer dispatcher.Close()
 	stage, resumed := newTestL3ForwardStage(dispatcher)
 
@@ -96,7 +96,7 @@ func TestL3UDPSniffOverrideDestinationNAT(t *testing.T) {
 		},
 	}
 	writeback := new(testL3NATWriteback)
-	dispatcher := tun.NewForwardDispatcher(handler, writeback, log.NewNOPFactory().NewLogger("forward"), tun.UDPNatOptions{}, 0)
+	dispatcher := tun.NewForwardDispatcher(handler, writeback, log.NewNOPFactory().NewLogger("forward"), 0, tun.UDPNatOptions{}, 0)
 	defer dispatcher.Close()
 	stage, resumed := newTestL3ForwardStage(dispatcher)
 
